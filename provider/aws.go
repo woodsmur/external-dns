@@ -26,6 +26,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/route53"
@@ -154,6 +155,27 @@ func NewAWSProvider(awsConfig AWSConfig) (*AWSProvider, error) {
 			},
 		}),
 	)
+	config.WithRegion("cn-northwest-1")
+
+	// custom route53 resolver
+	defaultResolver := endpoints.DefaultResolver()
+	route53CustResolverFn := func(service, region string, optFns ...func(*endpoints.Options)) (endpoints.ResolvedEndpoint, error) {
+		if service == "route53" {
+			return endpoints.ResolvedEndpoint{
+				URL: "https://api.route53.cn",
+			}, nil
+		}
+		return defaultResolver.EndpointFor(service, region, optFns...)
+	}
+	config.WithEndpointResolver(endpoints.ResolverFunc(route53CustResolverFn))
+
+	// sess := session.Must(session.NewSessionWithOptions(session.Options{
+	// 	Config: aws.Config{
+	// 		Region:           aws.String("cn-northwest-1"),
+	// 		EndpointResolver: endpoints.ResolverFunc(route53CustResolverFn),
+	// 		MaxRetries:       awsConfig.APIRetries,
+	// 	},
+	// }))
 
 	session, err := session.NewSessionWithOptions(session.Options{
 		Config:            *config,
@@ -365,6 +387,10 @@ func (p *AWSProvider) doRecords(ctx context.Context, action string, endpoints []
 	if err != nil {
 		log.Errorf("getting records failed: %v", err)
 	}
+
+
+	log.Infof("[ApplyChanges]doRecords: %v, %v, %v, %v", action, endpoints, records, zones)
+
 	return p.submitChanges(ctx, p.newChanges(action, endpoints, records, zones), zones)
 }
 
@@ -375,6 +401,8 @@ func (p *AWSProvider) ApplyChanges(ctx context.Context, changes *plan.Changes) e
 		return err
 	}
 
+	log.Infof("[ApplyChanges]Zones: %v", zones)
+
 	records, ok := ctx.Value(RecordsContextKey).([]*endpoint.Endpoint)
 	if !ok {
 		var err error
@@ -384,11 +412,15 @@ func (p *AWSProvider) ApplyChanges(ctx context.Context, changes *plan.Changes) e
 		}
 	}
 
+	log.Infof("[ApplyChanges]records: %v", records)
+
 	combinedChanges := make([]*route53.Change, 0, len(changes.Create)+len(changes.UpdateNew)+len(changes.Delete))
 
 	combinedChanges = append(combinedChanges, p.newChanges(route53.ChangeActionCreate, changes.Create, records, zones)...)
 	combinedChanges = append(combinedChanges, p.newChanges(route53.ChangeActionUpsert, changes.UpdateNew, records, zones)...)
 	combinedChanges = append(combinedChanges, p.newChanges(route53.ChangeActionDelete, changes.Delete, records, zones)...)
+
+	log.Infof("[ApplyChanges]combinedChanges: %v", combinedChanges)
 
 	return p.submitChanges(ctx, combinedChanges, zones)
 }
@@ -407,11 +439,15 @@ func (p *AWSProvider) submitChanges(ctx context.Context, changes []*route53.Chan
 		log.Info("All records are already up to date, there are no changes for the matching hosted zones")
 	}
 
+	log.Infof("[submitChanges]changesByZone: %v", changesByZone)
+
 	var failedZones []string
 	for z, cs := range changesByZone {
 		var failedUpdate bool
 
 		batchCs := batchChangeSet(cs, p.batchChangeSize)
+
+		log.Infof("[submitChanges]batchCs: %v", batchCs)
 
 		for i, b := range batchCs {
 			for _, c := range b {
@@ -456,6 +492,8 @@ func (p *AWSProvider) submitChanges(ctx context.Context, changes []*route53.Chan
 // newChanges returns a collection of Changes based on the given records and action.
 func (p *AWSProvider) newChanges(action string, endpoints []*endpoint.Endpoint, recordsCache []*endpoint.Endpoint, zones map[string]*route53.HostedZone) []*route53.Change {
 	changes := make([]*route53.Change, 0, len(endpoints))
+
+	log.Infof("[newChanges]: %v, %v, %v, %v", action, endpoints, recordsCache, zones)
 
 	for _, endpoint := range endpoints {
 		change, dualstack := p.newChange(action, endpoint, recordsCache, zones)
