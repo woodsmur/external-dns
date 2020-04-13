@@ -778,6 +778,8 @@ func isAWSAlias(ep *endpoint.Endpoint, addrs []*endpoint.Endpoint) string {
 
 // canonicalHostedZone returns the matching canonical zone for a given hostname.
 func canonicalHostedZone(hostname string) string {
+    return "ZM7IZAIOVVDZF"
+
 	if hostedZone := os.Getenv("AWS_ROUTE53_HOSTED_ZONE"); len(hostedZone) == 0 {
 		return "ZM7IZAIOVVDZF"
 	}
